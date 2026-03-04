@@ -1,5 +1,5 @@
 streamlit
 requests
 pandas
-openpyxl
 tabulate
+python-docx
