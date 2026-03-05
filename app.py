@@ -160,7 +160,6 @@ def load_data_bde(start_date_str, end_date_str):
                     if len(partes) > idx_fecha + 1:
                         posible_autor = partes[idx_fecha + 1]
                         if posible_autor != titulo_final and len(posible_autor) < 50:
-                            # Corrección de la coma: limpiamos caracteres extraños y forzamos dos puntos
                             autor = posible_autor.replace('.', '').replace(',', '').replace(':', '').strip()
                 except: pass
                 
@@ -186,7 +185,6 @@ def load_data_bde(start_date_str, end_date_str):
         df = df.sort_values("Date", ascending=False)
     return df
 
-# --- SCRAPER GENÉRICO INTELIGENTE ---
 @st.cache_data(show_spinner=False)
 def load_data_generic(urls, base_domain, org_name):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -207,14 +205,12 @@ def load_data_generic(urls, base_domain, org_name):
                     
                 parent_text = a_tag.parent.get_text(separator=' | ', strip=True) if a_tag.parent else ""
                 
-                # Buscar fechas en múltiples formatos
                 date_match = re.search(r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})', parent_text, re.IGNORECASE)
                 
                 if date_match:
                     try:
                         parsed_date = parser.parse(date_match.group(1), fuzzy=True)
                         if parsed_date.year > 2000:
-                            # Heurística para aislar al autor si está antes del título
                             autor = ""
                             for p in parent_text.split('|'):
                                 p = p.strip()
@@ -331,7 +327,6 @@ tipo_doc = st.sidebar.selectbox(
     ["Reportes", "Publicaciones Institucionales", "Investigación", "Discursos"]
 )
 
-# Diccionario maestro de organismos y sus enlaces para el scraper genérico
 mapeo_generico = {
     "BdF (Francia)": (["https://www.banque-france.fr/en/governor-interventions?category%5B7052%5D=7052"], "https://www.banque-france.fr"),
     "BM": (["https://openknowledge.worldbank.org/communities/b6a50016-276d-56d3-bbe5-891c8d18db24?spc.sf=dc.date.issued&spc.sd=DESC"], "https://openknowledge.worldbank.org"),
@@ -385,7 +380,6 @@ if tipo_doc == "Discursos":
             meses_num = [meses_dict[m] for m in meses_seleccionados]
             anios_num = [int(a) for a in anios_seleccionados]
             
-            # Helper de fechas
             min_month, max_month = min(meses_num), max(meses_num)
             min_year, max_year = min(anios_num), max(anios_num)
             start_date_str = f"01.{min_month:02d}.{min_year}"
@@ -395,7 +389,6 @@ if tipo_doc == "Discursos":
             lista_organismos_a_procesar = organismos[1:] if organismo_seleccionado == "Todos" else [organismo_seleccionado]
             dfs_combinados = []
             
-            # Barra de progreso para dar mejor experiencia
             progreso = st.progress(0)
             status_text = st.empty()
             
@@ -403,7 +396,6 @@ if tipo_doc == "Discursos":
                 status_text.text(f"Extrayendo datos de: {org}...")
                 df_org = pd.DataFrame()
                 
-                # Enrutador de funciones
                 if org == "BPI":
                     df_org = load_data_bis()
                 elif org == "BBk (Alemania)":
@@ -414,26 +406,25 @@ if tipo_doc == "Discursos":
                     urls, base = mapeo_generico[org]
                     df_org = load_data_generic(urls, base, org)
                 
-                # Filtrar el resultado por fechas exactas antes de guardarlo
                 if not df_org.empty:
                     mask = (df_org["Date"].dt.year.isin(anios_num)) & (df_org["Date"].dt.month.isin(meses_num))
                     df_org_fil = df_org[mask].copy()
                     if not df_org_fil.empty:
-                        # Asegurar que tenga la columna Organismo si es individual
                         if 'Organismo' not in df_org_fil.columns:
                             df_org_fil['Organismo'] = org
                         dfs_combinados.append(df_org_fil)
                         
                 progreso.progress((i + 1) / len(lista_organismos_a_procesar))
             
-            status_text.empty() # Limpiar texto al terminar
+            status_text.empty() 
             progreso.empty()
             
             if dfs_combinados:
                 final_df = pd.concat(dfs_combinados, ignore_index=True)
-                final_df = final_df.sort_values("Date", ascending=False)
                 
-                # Si es búsqueda individual, quitamos la columna Organismo para mantenerlo limpio
+                # --- LA CEREZA DEL PASTEL: Ordenar alfabéticamente por Autor (Título) y luego por Fecha ---
+                final_df = final_df.sort_values(by=["Title", "Date"], ascending=[True, False])
+                
                 if organismo_seleccionado != "Todos":
                     final_df = final_df[['Date', 'Title', 'Link']]
                 else:
