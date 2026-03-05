@@ -247,7 +247,6 @@ def load_data_fed(anios_num, extract_author=True):
         df = df.sort_values("Date", ascending=False)
     return df
 
-# --- NUEVO: SCRAPER ESPECÍFICO PARA BANCO DE FRANCIA (BdF) ---
 @st.cache_data(show_spinner=False)
 def load_data_bdf(start_date_str, end_date_str, extract_author=True):
     base_url = "https://www.banque-france.fr/en/governor-interventions"
@@ -496,7 +495,6 @@ if modo_app == "Categorías":
 
 st.sidebar.info("Herramienta de extracción automatizada para la elaboración del boletín mensual.")
 
-# Eliminamos BdF de este diccionario porque ahora tiene su propia función
 mapeo_discursos = {
     "BM": (["https://openknowledge.worldbank.org/communities/b6a50016-276d-56d3-bbe5-891c8d18db24?spc.sf=dc.date.issued&spc.sd=DESC"], "https://openknowledge.worldbank.org"),
     "BoC (Canadá)": (["https://www.bankofcanada.ca/press/speeches/"], "https://www.bankofcanada.ca"),
@@ -517,7 +515,7 @@ meses_dict = {"Enero": 1, "Febrero": 2, "Marzo": 3, "Abril": 4, "Mayo": 5, "Juni
 
 if modo_app == "Boletín":
     st.title("Generador de Boletín Mensual")
-    st.markdown("**Extrae y unifica documentos de todas las categorías y organismos por mes.**")
+    st.markdown("Extrae y unifica documentos de todas las categorías y organismos por mes.")
     st.markdown("---")
     
     col1, col2 = st.columns(2)
@@ -581,7 +579,8 @@ if modo_app == "Boletín":
             
             if dfs_boletin:
                 final_df = pd.concat(dfs_boletin, ignore_index=True)
-                final_df = final_df.sort_values(by=["Categoría", "Organismo", "Title", "Date"], ascending=[True, True, True, False])
+                # Orden: Categoría -> Título (A-Z) global -> Fecha
+                final_df = final_df.sort_values(by=["Categoría", "Title", "Date"], ascending=[True, True, False])
                 final_df = final_df[['Date', 'Categoría', 'Organismo', 'Title', 'Link']]
             else:
                 final_df = pd.DataFrame()
@@ -716,5 +715,3 @@ elif modo_app == "Categorías":
 
     else:
         st.info(f"El extractor de **{tipo_doc}** para **{organismo_seleccionado}** está en construcción.")
-
-
