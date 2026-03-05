@@ -39,7 +39,6 @@ st.markdown("""
 
 # ==========================================
 # FUNCIONES DE EXTRACCIÓN (BACKEND)
-# Se añadió el parámetro 'extract_author' a todas
 # ==========================================
 
 @st.cache_data(show_spinner=False)
@@ -60,8 +59,6 @@ def load_data_bis(extract_author=True):
                 title = html.unescape(speech.get("short_title", ""))
                 date_str = speech.get("publication_start_date", "")
                 link = "https://www.bis.org" + path + (".htm" if not path.endswith(".htm") else "")
-                
-                # BIS a veces ya incluye el autor en el short_title. 
                 rows.append({"Date": date_str, "Title": title, "Link": link, "Organismo": "BPI"})
         except:
             continue
@@ -239,7 +236,7 @@ def load_data_generic(urls, base_domain, org_name, extract_author=True):
     return df
 
 # ==========================================
-# FUNCIONES DE EXPORTACIÓN A WORD
+# FUNCIONES DE EXPORTACIÓN A WORD (100% DINÁMICO)
 # ==========================================
 def add_hyperlink(paragraph, text, url):
     part = paragraph.part
@@ -272,10 +269,11 @@ def add_hyperlink(paragraph, text, url):
     paragraph._p.append(hyperlink)
     return hyperlink
 
-def generate_word(dataframe, title="Discursos", subtitle=""):
+def generate_word(dataframe, title="Boletín Mensual", subtitle=""):
     doc = Document()
     heading = doc.add_heading(title, 0)
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    
     if subtitle:
         p_sub = doc.add_paragraph()
         p_sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -284,9 +282,11 @@ def generate_word(dataframe, title="Discursos", subtitle=""):
         run_sub.font.size = Pt(12)
     doc.add_paragraph()
 
+    # Columnas dinámicas excluyendo el Link
     display_cols = [c for c in dataframe.columns if c != 'Link']
     table = doc.add_table(rows=1, cols=len(display_cols))
     
+    # Encabezados en negrita
     hdr_cells = table.rows[0].cells
     for idx, header_text in enumerate(display_cols):
         p = hdr_cells[idx].paragraphs[0]
@@ -295,33 +295,24 @@ def generate_word(dataframe, title="Discursos", subtitle=""):
         run.font.size = Pt(12)
         run.bold = True 
 
+    # Llenado de filas de manera dinámica
     for index, row in dataframe.iterrows():
         row_cells = table.add_row().cells
-        date_str = str(row['Date'])[:10]
         
-        p_date = row_cells[0].paragraphs[0]
-        run_date = p_date.add_run(date_str)
-        run_date.font.name = 'Calibri'
-        run_date.font.size = Pt(12)
-        
-        # Lógica dinámica para acomodar columnas dependiendo de si incluye Categoría y/o Organismo
-        col_offset = 1
-        if 'Categoría' in display_cols:
-            p_cat = row_cells[col_offset].paragraphs[0]
-            run_cat = p_cat.add_run(str(row['Categoría']))
-            run_cat.font.name = 'Calibri'
-            run_cat.font.size = Pt(12)
-            col_offset += 1
+        for i, col_name in enumerate(display_cols):
+            p = row_cells[i].paragraphs[0]
             
-        if 'Organismo' in display_cols:
-            p_org = row_cells[col_offset].paragraphs[0]
-            run_org = p_org.add_run(str(row['Organismo']))
-            run_org.font.name = 'Calibri'
-            run_org.font.size = Pt(12)
-            col_offset += 1
-            
-        p_title = row_cells[col_offset].paragraphs[0]
-        add_hyperlink(p_title, str(row['Title']), str(row['Link']))
+            if col_name == 'Title':
+                add_hyperlink(p, str(row['Title']), str(row['Link']))
+            elif col_name == 'Date':
+                date_str = str(row['Date'])[:10]
+                run = p.add_run(date_str)
+                run.font.name = 'Calibri'
+                run.font.size = Pt(12)
+            else:
+                run = p.add_run(str(row[col_name]))
+                run.font.name = 'Calibri'
+                run.font.size = Pt(12)
 
     output = BytesIO()
     doc.save(output)
@@ -340,17 +331,17 @@ except:
 st.sidebar.markdown("---")
 st.sidebar.header("Menú de Navegación")
 
-# NUEVO: Selector de Modo (Boletín Anual vs Explorador)
+# 1. Selector principal (Boletín vs Explorador)
 modo_app = st.sidebar.radio(
     "Modo de Operación",
     ["Explorador de Categorías", "Generar Boletín Anual"]
 )
-
 st.sidebar.markdown("---")
 
 tipo_doc = ""
 organismo_seleccionado = ""
 
+# 2. Sub-selectores (Solo visibles en Explorador)
 if modo_app == "Explorador de Categorías":
     tipo_doc = st.sidebar.selectbox(
         "Selecciona el Tipo de Documento",
@@ -369,10 +360,7 @@ if modo_app == "Explorador de Categorías":
     organismo_seleccionado = st.sidebar.selectbox("Selecciona el Organismo", organismos)
 
 st.sidebar.info("Herramienta de extracción automatizada para la elaboración del boletín mensual.")
-st.sidebar.markdown("<br>", unsafe_allow_html=True)
-st.sidebar.markdown("👨‍💻 **Desarrollado por:** [Tu Nombre](https://github.com/tu-usuario)")
 
-# Mapeo maestro para Discursos
 mapeo_discursos = {
     "BdF (Francia)": (["https://www.banque-france.fr/en/governor-interventions?category%5B7052%5D=7052"], "https://www.banque-france.fr"),
     "BM": (["https://openknowledge.worldbank.org/communities/b6a50016-276d-56d3-bbe5-891c8d18db24?spc.sf=dc.date.issued&spc.sd=DESC"], "https://openknowledge.worldbank.org"),
@@ -387,20 +375,20 @@ mapeo_discursos = {
 }
 
 # ==========================================
-# MAIN APP: MODO BOLETÍN ANUAL
+# LÓGICA PRINCIPAL DE LA APP
 # ==========================================
+
 if modo_app == "Generar Boletín Anual":
     st.title("Generador de Boletín Consolidado")
-    st.markdown("**Extrae y unifica documentos de todas las categorías y organismos.**")
+    st.markdown("**Extrae y unifica documentos de TODAS las categorías y organismos.**")
     st.markdown("---")
     
     anios_str = ["2026", "2025", "2024", "2023", "2022", "2021", "2020"]
     anio_seleccionado = st.selectbox("Selecciona el Año del Boletín", anios_str)
     
-    buscar_boletin = st.button("📄 Generar Boletín", type="primary")
+    buscar_boletin = st.button("📄 Generar Boletín Anual", type="primary")
     
     if buscar_boletin or "boletin_df_filtrado" in st.session_state:
-        # Definir rango del año completo
         start_date_str = f"01.01.{anio_seleccionado}"
         end_date_str = f"31.12.{anio_seleccionado}"
         
@@ -408,15 +396,12 @@ if modo_app == "Generar Boletín Anual":
         progreso = st.progress(0)
         status_text = st.empty()
         
-        # --- BLOQUE 1: DISCURSOS ---
-        # (Aquí extraeremos todos los discursos usando lógica similar a la de 'Todos')
+        # --- EXTRACCIÓN DE DISCURSOS ---
         orgs_discursos = ["BBk (Alemania)", "BdE (España)", "BdF (Francia)", "BM", "BoC (Canadá)", "BoE (Inglaterra)", "BoJ (Japón)", "BPI", "CEF", "ECB (Europa)", "Fed (Estados Unidos)", "FMI", "PBoC (China)"]
+        total_pasos = len(orgs_discursos)
         
-        total_pasos = len(orgs_discursos) # + len(orgs_reportes) etc... 
-        paso_actual = 0
-        
-        for org in orgs_discursos:
-            status_text.text(f"Extrayendo Discursos de: {org}...")
+        for i, org in enumerate(orgs_discursos):
+            status_text.text(f"Procesando Discursos: {org}...")
             df_org = pd.DataFrame()
             
             if org == "BPI":
@@ -438,18 +423,16 @@ if modo_app == "Generar Boletín Anual":
                     df_org_fil['Categoría'] = "Discursos"
                     dfs_boletin.append(df_org_fil)
             
-            paso_actual += 1
-            progreso.progress(paso_actual / total_pasos)
+            progreso.progress((i + 1) / total_pasos)
             
-        # --- FUTUROS BLOQUES: Reportes, Investigación, etc irán aquí ---
-        
         status_text.empty()
         progreso.empty()
         
         if dfs_boletin:
             final_df = pd.concat(dfs_boletin, ignore_index=True)
-            # Ordenamos por Categoría, Título (Autor) y Fecha
-            final_df = final_df.sort_values(by=["Categoría", "Title", "Date"], ascending=[True, True, False])
+            # Orden: Categoría -> Organismo -> Autor/Título -> Fecha
+            final_df = final_df.sort_values(by=["Categoría", "Organismo", "Title", "Date"], ascending=[True, True, True, False])
+            # Seleccionar las 4 columnas principales
             final_df = final_df[['Date', 'Categoría', 'Organismo', 'Title', 'Link']]
         else:
             final_df = pd.DataFrame()
@@ -457,11 +440,11 @@ if modo_app == "Generar Boletín Anual":
         st.session_state["boletin_df_filtrado"] = final_df
 
         if len(final_df) > 0:
-            st.subheader(f"Resultados Consolidados del Año {anio_seleccionado}")
-            col_mensaje, col_boton = st.columns([3, 1])
-            with col_mensaje:
-                st.success(f"Se encontraron **{len(final_df)}** documentos en total para el boletín.")
-            with col_boton:
+            st.subheader(f"Resultados del Boletín {anio_seleccionado}")
+            col_msg, col_btn = st.columns([3, 1])
+            with col_msg:
+                st.success(f"Se consolidaron **{len(final_df)}** documentos.")
+            with col_btn:
                 word_file = generate_word(final_df, title="Boletín Mensual de Organismos Internacionales", subtitle=str(anio_seleccionado))
                 st.download_button(label="📄 Descargar Boletín", data=word_file, file_name=f"Boletin_Consolidado_{anio_seleccionado}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
             
@@ -473,9 +456,6 @@ if modo_app == "Generar Boletín Anual":
             st.warning("No se encontraron documentos para el año seleccionado.")
 
 
-# ==========================================
-# MAIN APP: MODO EXPLORADOR
-# ==========================================
 elif modo_app == "Explorador de Categorías":
     st.title("Global Policy & Research Aggregator")
     st.markdown(f"**Explorador de {tipo_doc} - {organismo_seleccionado}**")
@@ -492,7 +472,6 @@ elif modo_app == "Explorador de Categorías":
 
         buscar = st.button("🔍 Buscar", type="primary")
         
-        # Determinar si se debe extraer autor basado en el Tipo de Documento
         debe_extraer_autor = True if tipo_doc == "Discursos" else False
 
         if buscar or "explorador_df_filtrado" in st.session_state:
@@ -508,9 +487,7 @@ elif modo_app == "Explorador de Categorías":
                 last_day = calendar.monthrange(max_year, max_month)[1]
                 end_date_str = f"{last_day:02d}.{max_month:02d}.{max_year}"
 
-                # Lógica para "Todos" o "Individual"
                 if organismo_seleccionado == "Todos" and tipo_doc != "Discursos":
-                    # Placeholder para cuando construyamos Reportes, etc.
                     st.info(f"La extracción consolidada para {tipo_doc} está en construcción.")
                     st.stop()
                 
@@ -549,7 +526,6 @@ elif modo_app == "Explorador de Categorías":
                 
                 if dfs_combinados:
                     final_df = pd.concat(dfs_combinados, ignore_index=True)
-                    # Orden Alfabético por Título
                     final_df = final_df.sort_values(by=["Title", "Date"], ascending=[True, False])
                     
                     if organismo_seleccionado != "Todos":
@@ -587,4 +563,3 @@ elif modo_app == "Explorador de Categorías":
 
     else:
         st.info(f"El extractor de **{tipo_doc}** para **{organismo_seleccionado}** está en construcción.")
-        st.write("Añada aquí la lógica específica de scraping para esta institución.")
