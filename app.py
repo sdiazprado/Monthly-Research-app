@@ -191,7 +191,69 @@ def load_data_bde(start_date_str, end_date_str, extract_author=True):
         df = df.sort_values("Date", ascending=False)
     return df
 
+# --- NUEVO: SCRAPER ESPECÍFICO PARA LA FED ---
 @st.cache_data(show_spinner=False)
+def load_data_fed(anios_num, extract_author=True):
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    rows = []
+    
+    for year in anios_num:
+        # La FED almacena los discursos históricos y actuales por año
+        url = f"https://www.federalreserve.gov/newsevents/{year}-speeches.htm"
+        try:
+            res = requests.get(url, headers=headers, timeout=12)
+            # Si el archivo del año da error, a veces el año actual está en la raíz
+            if res.status_code == 404:
+                url = "https://www.federalreserve.gov/newsevents/speeches.htm"
+                res = requests.get(url, headers=headers, timeout=12)
+            
+            soup = BeautifulSoup(res.text, 'html.parser')
+            
+            # Buscar todos los enlaces que sean estrictamente discursos
+            for a_tag in soup.find_all('a', href=True):
+                href = a_tag['href']
+                if '/newsevents/speech/' in href and '.htm' in href:
+                    link = "https://www.federalreserve.gov" + href if href.startswith('/') else href
+                    titulo = a_tag.get_text(strip=True)
+                    
+                    # Buscar el contenedor padre para encontrar la fecha y el autor
+                    parent_div = a_tag.find_parent('div', class_='row')
+                    if not parent_div:
+                        parent_div = a_tag.parent
+                    
+                    text_content = parent_div.get_text(separator=' | ', strip=True)
+                    # Regex para formatos de fecha gringos (Ej: 2/26/2026)
+                    date_match = re.search(r'(\d{1,2}/\d{1,2}/\d{4}|\w+\s\d{1,2},\s\d{4})', text_content)
+                    
+                    if date_match:
+                        try:
+                            parsed_date = parser.parse(date_match.group(1))
+                            if parsed_date.year not in anios_num: continue
+                            
+                            autor = ""
+                            if extract_author:
+                                partes = text_content.split(' | ')
+                                for p in partes:
+                                    p_clean = p.strip()
+                                    # Evitar confundir título o fecha con autor
+                                    if p_clean and p_clean != titulo and date_match.group(1) not in p_clean and 'Watch Live' not in p_clean:
+                                        # Identificadores típicos de la FED
+                                        if any(cargo in p_clean for cargo in ['Chair', 'Governor', 'Vice Chair', 'President']):
+                                            autor = p_clean.replace(',', '').replace(':', '').strip()
+                                            # Limpiar el prefijo de cargo para dejar solo el nombre si se desea, o dejar el cargo.
+                                            break
+                            
+                            final_title = f"{autor}: {titulo}" if autor else titulo
+                            rows.append({"Date": parsed_date, "Title": final_title, "Link": link, "Organismo": "Fed (Estados Unidos)"})
+                        except: pass
+        except: pass
+        
+    df = pd.DataFrame(rows).drop_duplicates(subset=['Link']) if rows else pd.DataFrame()
+    if not df.empty:
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values("Date", ascending=False)
+    return df
+
 @st.cache_data(show_spinner=False)
 def load_data_generic(urls, base_domain, org_name, extract_author=True):
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -210,14 +272,10 @@ def load_data_generic(urls, base_domain, org_name, extract_author=True):
                 title = re.sub(r'\s+', ' ', a_tag.get_text(separator=" ", strip=True))
                 if len(title) < 15 or "read more" in title.lower() or "download" in title.lower(): continue
                 
-                # Búsqueda ampliada: Revisamos el padre, y si no hay suerte, revisamos al abuelo (necesario para la FED y el FMI)
                 parent_text = a_tag.parent.get_text(separator=' | ', strip=True) if a_tag.parent else ""
                 grandparent_text = a_tag.parent.parent.get_text(separator=' | ', strip=True) if a_tag.parent and a_tag.parent.parent else ""
-                
-                # Unimos ambos textos para que el buscador tenga todo el contexto de la "fila"
                 full_context_text = parent_text + " | " + grandparent_text
                 
-                # Regex corregida: Acepta \d{1,2} para meses y días (Ej. 2/26/2026 o 02/26/2026)
                 date_match = re.search(r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})', full_context_text, re.IGNORECASE)
                 
                 if date_match:
@@ -226,11 +284,9 @@ def load_data_generic(urls, base_domain, org_name, extract_author=True):
                         if parsed_date.year > 2000:
                             autor = ""
                             if extract_author:
-                                # Buscamos en el contexto completo para aislar al autor
                                 for p in full_context_text.split('|'):
                                     p = p.strip()
                                     if p != title and date_match.group(1) not in p and 4 < len(p) < 45 and not any(c.isdigit() for c in p):
-                                        # Limpiamos prefijos extraños
                                         autor = p.replace(',', '').replace(':', '').replace('By ', '').replace('Watch Live', '').strip()
                                         break
                             
@@ -246,7 +302,7 @@ def load_data_generic(urls, base_domain, org_name, extract_author=True):
     return df
 
 # ==========================================
-# FUNCIONES DE EXPORTACIÓN A WORD (100% DINÁMICO)
+# FUNCIONES DE EXPORTACIÓN A WORD
 # ==========================================
 def add_hyperlink(paragraph, text, url):
     part = paragraph.part
@@ -292,11 +348,9 @@ def generate_word(dataframe, title="BOLETIN MENSUAL", subtitle=""):
         run_sub.font.size = Pt(12)
     doc.add_paragraph()
 
-    # Columnas dinámicas excluyendo el Link
     display_cols = [c for c in dataframe.columns if c != 'Link']
     table = doc.add_table(rows=1, cols=len(display_cols))
     
-    # Encabezados en negrita
     hdr_cells = table.rows[0].cells
     for idx, header_text in enumerate(display_cols):
         p = hdr_cells[idx].paragraphs[0]
@@ -305,7 +359,6 @@ def generate_word(dataframe, title="BOLETIN MENSUAL", subtitle=""):
         run.font.size = Pt(12)
         run.bold = True 
 
-    # Llenado de filas de manera dinámica
     for index, row in dataframe.iterrows():
         row_cells = table.add_row().cells
         
@@ -341,18 +394,18 @@ except:
 st.sidebar.markdown("---")
 st.sidebar.header("Menú de Navegación")
 
-# 1. Selector principal (Boletín vs Explorador)
+# 1. Menú Simplificado
 modo_app = st.sidebar.radio(
-    "Modo de Operación",
-    ["Explorador de Categorías", "Generar Boletín Anual"]
+    "",
+    ["Boletín", "Categorías"]
 )
 st.sidebar.markdown("---")
 
 tipo_doc = ""
 organismo_seleccionado = ""
 
-# 2. Sub-selectores (Solo visibles en Explorador)
-if modo_app == "Explorador de Categorías":
+# 2. Sub-selectores (Solo visibles en Explorador de Categorías)
+if modo_app == "Categorías":
     tipo_doc = st.sidebar.selectbox(
         "Selecciona el Tipo de Documento",
         ["Reportes", "Publicaciones Institucionales", "Investigación", "Discursos"]
@@ -371,6 +424,7 @@ if modo_app == "Explorador de Categorías":
 
 st.sidebar.info("Herramienta de extracción automatizada para la elaboración del boletín mensual.")
 
+# Diccionarios de rutas
 mapeo_discursos = {
     "BdF (Francia)": (["https://www.banque-france.fr/en/governor-interventions?category%5B7052%5D=7052"], "https://www.banque-france.fr"),
     "BM": (["https://openknowledge.worldbank.org/communities/b6a50016-276d-56d3-bbe5-891c8d18db24?spc.sf=dc.date.issued&spc.sd=DESC"], "https://openknowledge.worldbank.org"),
@@ -379,102 +433,119 @@ mapeo_discursos = {
     "BoJ (Japón)": (["https://www.boj.or.jp/en/about/press/index.htm"], "https://www.boj.or.jp"),
     "CEF": (["https://www.fsb.org/press/speeches-and-statements/"], "https://www.fsb.org"),
     "ECB (Europa)": (["https://www.ecb.europa.eu/press/pubbydate/html/index.en.html?name_of_publication=Speech"], "https://www.ecb.europa.eu"),
-    "Fed (Estados Unidos)": (["https://www.federalreserve.gov/newsevents/speeches-testimony.htm"], "https://www.federalreserve.gov"),
     "FMI": (["https://www.imf.org/en/news/searchnews#sortCriteria=%40imfdate%20descending&cf-type=SPEECHES", "https://www.imf.org/en/news/searchnews#sortCriteria=%40imfdate%20descending&cf-type=TRANSCRIPTS"], "https://www.imf.org"),
     "PBoC (China)": (["https://www.pbc.gov.cn/en/3688110/3688175/index.html"], "https://www.pbc.gov.cn")
 }
+
+# Listas compartidas
+anios_str = ["2026", "2025", "2024", "2023", "2022", "2021", "2020"]
+meses_dict = {"Enero": 1, "Febrero": 2, "Marzo": 3, "Abril": 4, "Mayo": 5, "Junio": 6, "Julio": 7, "Agosto": 8, "Septiembre": 9, "Octubre": 10, "Noviembre": 11, "Diciembre": 12}
+
 
 # ==========================================
 # LÓGICA PRINCIPAL DE LA APP
 # ==========================================
 
-if modo_app == "Generar Boletín Anual":
-    st.title("Generador de Boletín Consolidado")
-    st.markdown("**Extrae y unifica documentos de TODAS las categorías y organismos.**")
+if modo_app == "Boletín":
+    st.title("Generador de Boletín Mensual")
+    st.markdown("**Extrae y unifica documentos de TODAS las categorías y organismos por mes.**")
     st.markdown("---")
     
-    anios_str = ["2026", "2025", "2024", "2023", "2022", "2021", "2020"]
-    anio_seleccionado = st.selectbox("Selecciona el Año del Boletín", anios_str)
+    col1, col2 = st.columns(2)
+    with col1: meses_seleccionados = st.multiselect("Mes(es)", options=list(meses_dict.keys()), default=[])
+    with col2: anios_seleccionados = st.multiselect("Año(s)", options=anios_str, default=["2026"])
     
-    buscar_boletin = st.button("📄 Generar Boletín Anual", type="primary")
+    buscar_boletin = st.button("📄 Generar Boletín Mensual", type="primary")
     
     if buscar_boletin or "boletin_df_filtrado" in st.session_state:
-        start_date_str = f"01.01.{anio_seleccionado}"
-        end_date_str = f"31.12.{anio_seleccionado}"
-        
-        dfs_boletin = []
-        progreso = st.progress(0)
-        status_text = st.empty()
-        
-        # --- EXTRACCIÓN DE DISCURSOS ---
-        orgs_discursos = ["BBk (Alemania)", "BdE (España)", "BdF (Francia)", "BM", "BoC (Canadá)", "BoE (Inglaterra)", "BoJ (Japón)", "BPI", "CEF", "ECB (Europa)", "Fed (Estados Unidos)", "FMI", "PBoC (China)"]
-        total_pasos = len(orgs_discursos)
-        
-        for i, org in enumerate(orgs_discursos):
-            status_text.text(f"Procesando Discursos: {org}...")
-            df_org = pd.DataFrame()
+        if not meses_seleccionados or not anios_seleccionados:
+            st.warning("⚠️ Por favor, selecciona al menos un mes y un año.")
+        else:
+            meses_num = [meses_dict[m] for m in meses_seleccionados]
+            anios_num = [int(a) for a in anios_seleccionados]
             
-            if org == "BPI":
-                df_org = load_data_bis(extract_author=True)
-            elif org == "BBk (Alemania)":
-                df_org = load_data_bbk(start_date_str, end_date_str, extract_author=True)
-            elif org == "BdE (España)":
-                df_org = load_data_bde(start_date_str, end_date_str, extract_author=True)
-            elif org in mapeo_discursos:
-                urls, base = mapeo_discursos[org]
-                df_org = load_data_generic(urls, base, org, extract_author=True)
+            min_month, max_month = min(meses_num), max(meses_num)
+            min_year, max_year = min(anios_num), max(anios_num)
+            start_date_str = f"01.{min_month:02d}.{min_year}"
+            last_day = calendar.monthrange(max_year, max_month)[1]
+            end_date_str = f"{last_day:02d}.{max_month:02d}.{max_year}"
+            
+            dfs_boletin = []
+            progreso = st.progress(0)
+            status_text = st.empty()
+            
+            # --- EXTRACCIÓN DE DISCURSOS ---
+            orgs_discursos = ["BBk (Alemania)", "BdE (España)", "BdF (Francia)", "BM", "BoC (Canadá)", "BoE (Inglaterra)", "BoJ (Japón)", "BPI", "CEF", "ECB (Europa)", "Fed (Estados Unidos)", "FMI", "PBoC (China)"]
+            total_pasos = len(orgs_discursos)
+            
+            for i, org in enumerate(orgs_discursos):
+                status_text.text(f"Procesando Discursos: {org}...")
+                df_org = pd.DataFrame()
                 
-            if not df_org.empty:
-                mask = (df_org["Date"].dt.year == int(anio_seleccionado))
-                df_org_fil = df_org[mask].copy()
-                if not df_org_fil.empty:
-                    if 'Organismo' not in df_org_fil.columns:
-                        df_org_fil['Organismo'] = org
-                    df_org_fil['Categoría'] = "Discursos"
-                    dfs_boletin.append(df_org_fil)
+                if org == "BPI":
+                    df_org = load_data_bis(extract_author=True)
+                elif org == "BBk (Alemania)":
+                    df_org = load_data_bbk(start_date_str, end_date_str, extract_author=True)
+                elif org == "BdE (España)":
+                    df_org = load_data_bde(start_date_str, end_date_str, extract_author=True)
+                elif org == "Fed (Estados Unidos)":
+                    df_org = load_data_fed(anios_num, extract_author=True)
+                elif org in mapeo_discursos:
+                    urls, base = mapeo_discursos[org]
+                    df_org = load_data_generic(urls, base, org, extract_author=True)
+                    
+                if not df_org.empty:
+                    # Aplicamos filtro exacto de mes y año
+                    mask = (df_org["Date"].dt.year.isin(anios_num)) & (df_org["Date"].dt.month.isin(meses_num))
+                    df_org_fil = df_org[mask].copy()
+                    if not df_org_fil.empty:
+                        if 'Organismo' not in df_org_fil.columns:
+                            df_org_fil['Organismo'] = org
+                        df_org_fil['Categoría'] = "Discursos"
+                        dfs_boletin.append(df_org_fil)
+                
+                progreso.progress((i + 1) / total_pasos)
+                
+            status_text.empty()
+            progreso.empty()
             
-            progreso.progress((i + 1) / total_pasos)
-            
-        status_text.empty()
-        progreso.empty()
-        
-        if dfs_boletin:
-            final_df = pd.concat(dfs_boletin, ignore_index=True)
-            # Orden: Categoría -> Organismo -> Autor/Título -> Fecha
-            final_df = final_df.sort_values(by=["Categoría", "Organismo", "Title", "Date"], ascending=[True, True, True, False])
-            # Seleccionar las 4 columnas principales
-            final_df = final_df[['Date', 'Categoría', 'Organismo', 'Title', 'Link']]
-        else:
-            final_df = pd.DataFrame()
-            
-        st.session_state["boletin_df_filtrado"] = final_df
+            if dfs_boletin:
+                final_df = pd.concat(dfs_boletin, ignore_index=True)
+                # Orden: Categoría -> Organismo -> Autor/Título -> Fecha
+                final_df = final_df.sort_values(by=["Categoría", "Organismo", "Title", "Date"], ascending=[True, True, True, False])
+                final_df = final_df[['Date', 'Categoría', 'Organismo', 'Title', 'Link']]
+            else:
+                final_df = pd.DataFrame()
+                
+            st.session_state["boletin_df_filtrado"] = final_df
 
-        if len(final_df) > 0:
-            st.subheader(f"Resultados del Boletín {anio_seleccionado}")
-            col_msg, col_btn = st.columns([3, 1])
-            with col_msg:
-                st.success(f"Se consolidaron **{len(final_df)}** documentos.")
-            with col_btn:
-                word_file = generate_word(final_df, title="Boletín Mensual de Organismos Internacionales", subtitle=str(anio_seleccionado))
-                st.download_button(label="📄 Descargar Boletín", data=word_file, file_name=f"Boletin_Consolidado_{anio_seleccionado}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
-            
-            display_df = final_df.copy()
-            display_df["Date"] = display_df["Date"].dt.strftime('%Y-%m-%d')
-            display_df["Title"] = display_df.apply(lambda x: f"[{x['Title']}]({x['Link']})", axis=1)
-            st.markdown(display_df[["Date", "Categoría", "Organismo", "Title"]].to_markdown(index=False), unsafe_allow_html=True)
-        else:
-            st.warning("No se encontraron documentos para el año seleccionado.")
+            if len(final_df) > 0:
+                str_meses, str_anios = ", ".join(meses_seleccionados), ", ".join(anios_seleccionados)
+                st.subheader(f"Resultados del Boletín: {str_meses} {str_anios}")
+                
+                col_msg, col_btn = st.columns([3, 1])
+                with col_msg:
+                    st.success(f"Se consolidaron **{len(final_df)}** documentos.")
+                with col_btn:
+                    subtitulo = f"{str_meses} {str_anios}"
+                    word_file = generate_word(final_df, title="Boletín Mensual de Organismos Internacionales", subtitle=subtitulo)
+                    st.download_button(label="📄 Descargar Boletín", data=word_file, file_name=f"Boletin_Consolidado_{'_'.join(meses_seleccionados)}.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+                
+                display_df = final_df.copy()
+                display_df["Date"] = display_df["Date"].dt.strftime('%Y-%m-%d')
+                display_df["Title"] = display_df.apply(lambda x: f"[{x['Title']}]({x['Link']})", axis=1)
+                st.markdown(display_df[["Date", "Categoría", "Organismo", "Title"]].to_markdown(index=False), unsafe_allow_html=True)
+            else:
+                st.warning("No se encontraron documentos para las fechas seleccionadas.")
 
 
-elif modo_app == "Explorador de Categorías":
+elif modo_app == "Categorías":
     st.title("Global Policy & Research Aggregator")
     st.markdown(f"**Explorador de {tipo_doc} - {organismo_seleccionado}**")
     st.markdown("---")
 
     if tipo_doc == "Discursos" or (tipo_doc in ["Reportes", "Investigación", "Publicaciones Institucionales"] and organismo_seleccionado == "Todos"):
         st.subheader("1. Selecciona el Mes y Año")
-        anios_str = ["2026", "2025", "2024", "2023", "2022", "2021", "2020"]
-        meses_dict = {"Enero": 1, "Febrero": 2, "Marzo": 3, "Abril": 4, "Mayo": 5, "Junio": 6, "Julio": 7, "Agosto": 8, "Septiembre": 9, "Octubre": 10, "Noviembre": 11, "Diciembre": 12}
 
         col1, col2 = st.columns(2)
         with col1: meses_seleccionados = st.multiselect("Mes(es)", options=list(meses_dict.keys()), default=[])
@@ -517,6 +588,8 @@ elif modo_app == "Explorador de Categorías":
                         df_org = load_data_bbk(start_date_str, end_date_str, extract_author=debe_extraer_autor)
                     elif org == "BdE (España)":
                         df_org = load_data_bde(start_date_str, end_date_str, extract_author=debe_extraer_autor)
+                    elif org == "Fed (Estados Unidos)":
+                        df_org = load_data_fed(anios_num, extract_author=debe_extraer_autor)
                     elif org in mapeo_discursos and tipo_doc == "Discursos":
                         urls, base = mapeo_discursos[org]
                         df_org = load_data_generic(urls, base, org, extract_author=debe_extraer_autor)
@@ -573,5 +646,3 @@ elif modo_app == "Explorador de Categorías":
 
     else:
         st.info(f"El extractor de **{tipo_doc}** para **{organismo_seleccionado}** está en construcción.")
-
-
