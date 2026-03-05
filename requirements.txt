@@ -4,3 +4,4 @@ pandas
 python-docx
 beautifulsoup4
 python-dateutil
+tabulate
