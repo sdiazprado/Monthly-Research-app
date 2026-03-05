@@ -232,6 +232,10 @@ def load_data_fed(anios_num, extract_author=True):
                                     if p_clean and p_clean != titulo and date_match.group(1) not in p_clean and 'Watch Live' not in p_clean:
                                         if any(cargo in p_clean for cargo in ['Chair', 'Governor', 'Vice Chair', 'President']):
                                             autor = p_clean.replace(',', '').replace(':', '').strip()
+                                            # Limpiar cargos, "Statement from Federal Reserve..." etc.
+                                            autor = re.sub(r'^(?:Statement\s+(?:by|from)\s+)?(?:Federal Reserve\s+)?(?:Former\s+)?(Vice Chair for Supervision|Vice Chair|Chair|Governor|President)\s+', '', autor, flags=re.IGNORECASE)
+                                            # Limpiar la inicial intermedia (ej. " W.", " H.")
+                                            autor = re.sub(r'\s+[A-Z]\.\s+', ' ', autor)
                                             break
                             
                             final_title = f"{autor}: {titulo}" if autor else titulo
