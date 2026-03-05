@@ -185,7 +185,7 @@ def add_hyperlink(paragraph, text, url):
     paragraph._p.append(hyperlink)
     return hyperlink
 
-def generate_word(dataframe, title="Discursos", subtitle=""):
+    def generate_word(dataframe, title="Discursos", subtitle=""):
     doc = Document()
     
     # Título principal centrado
@@ -200,37 +200,47 @@ def generate_word(dataframe, title="Discursos", subtitle=""):
         run_sub.font.name = 'Calibri'
         run_sub.font.size = Pt(12)
 
-    # Añadir un espacio antes de la tabla
     doc.add_paragraph()
 
-    # Tabla sin bordes
-    table = doc.add_table(rows=1, cols=2)
+    # Determinar las columnas dinámicamente (Omitimos el Link que va oculto)
+    display_cols = [c for c in dataframe.columns if c != 'Link']
+    table = doc.add_table(rows=1, cols=len(display_cols))
     
-    # Encabezados con formato Calibri 12
+    # Encabezados con formato Calibri 12 Negrita
     hdr_cells = table.rows[0].cells
-    for idx, header_text in enumerate(['Date', 'Title']):
+    for idx, header_text in enumerate(display_cols):
         p = hdr_cells[idx].paragraphs[0]
         run = p.add_run(header_text)
         run.font.name = 'Calibri'
         run.font.size = Pt(12)
-        # Dejamos los encabezados en negrita para diferenciar del contenido
         run.bold = True 
 
-    # Llenado de datos (Sin negritas)
+    # Llenado de datos
     for index, row in dataframe.iterrows():
         row_cells = table.add_row().cells
         
         date_str = str(row['Date'])[:10]
         
-        # Celda 1: Fecha normal (Calibri 12)
+        # Celda 1: Fecha 
         p_date = row_cells[0].paragraphs[0]
         run_date = p_date.add_run(date_str)
         run_date.font.name = 'Calibri'
         run_date.font.size = Pt(12)
         
-        # Celda 2: Título (El formato normal se inyecta por dentro de add_hyperlink)
-        p_title = row_cells[1].paragraphs[0]
-        add_hyperlink(p_title, str(row['Title']), str(row['Link']))
+        # Si la tabla combinada tiene la columna 'Organismo', la colocamos en medio
+        if 'Organismo' in display_cols:
+            p_org = row_cells[1].paragraphs[0]
+            run_org = p_org.add_run(str(row['Organismo']))
+            run_org.font.name = 'Calibri'
+            run_org.font.size = Pt(12)
+            
+            # Celda 3: Título con Link
+            p_title = row_cells[2].paragraphs[0]
+            add_hyperlink(p_title, str(row['Title']), str(row['Link']))
+        else:
+            # Si es la vista normal (sin organismo), el título va en la celda 2
+            p_title = row_cells[1].paragraphs[0]
+            add_hyperlink(p_title, str(row['Title']), str(row['Link']))
 
     output = BytesIO()
     doc.save(output)
@@ -256,8 +266,10 @@ tipo_doc = st.sidebar.selectbox(
 )
 
 # 3. Selector de Organismo (Listas exactas basadas en tus imágenes)
+# 3. Selector de Organismo (Listas exactas basadas en tus imágenes)
 if tipo_doc == "Discursos":
     organismos = [
+        "Todos", # <-- AGREGAMOS ESTA OPCIÓN
         "BBk (Alemania)", "BdE (España)", "BdF (Francia)", "BM", 
         "BoC (Canadá)", "BoE (Inglaterra)", "BoJ (Japón)", "BPI", 
         "CEF", "ECB (Europa)", "Fed (Estados Unidos)", "FMI", "PBoC (China)"
@@ -286,7 +298,106 @@ st.markdown("---")
 # ==========================================
 # MÓDULOS DE EXTRACCIÓN
 # ==========================================
+# MÓDULO: DISCURSOS -> TODOS
+if tipo_doc == "Discursos" and organismo_seleccionado == "Todos":
+    
+    st.subheader("1. Selecciona el Mes y Año para reporte consolidado")
 
+    anios_str = ["2026", "2025", "2024", "2023", "2022", "2021", "2020"]
+    meses_dict = {
+        "Enero": 1, "Febrero": 2, "Marzo": 3, "Abril": 4,
+        "Mayo": 5, "Junio": 6, "Julio": 7, "Agosto": 8,
+        "Septiembre": 9, "Octubre": 10, "Noviembre": 11, "Diciembre": 12
+    }
+
+    col1, col2 = st.columns(2)
+    with col1:
+        meses_seleccionados = st.multiselect("Mes(es)", options=list(meses_dict.keys()), default=[])
+    with col2:
+        anios_seleccionados = st.multiselect("Año(s)", options=anios_str, default=["2026"])
+
+    buscar = st.button("🔍 Extraer y Consolidar Discursos", type="primary")
+
+    if buscar or "todos_df_filtrado" in st.session_state:
+        if not meses_seleccionados or not anios_seleccionados:
+            st.warning("⚠️ Por favor, selecciona al menos un mes y un año.")
+        else:
+            meses_num = [meses_dict[m] for m in meses_seleccionados]
+            anios_num = [int(a) for a in anios_seleccionados]
+            
+            dfs_combinados = []
+            
+            # --- 1. Extraer BPI ---
+            with st.spinner("Extrayendo del BPI..."):
+                df_bpi = load_data_bis()
+                if not df_bpi.empty:
+                    mask_bpi = (df_bpi["Date"].dt.year.isin(anios_num)) & (df_bpi["Date"].dt.month.isin(meses_num))
+                    df_bpi_fil = df_bpi[mask_bpi].copy()
+                    if not df_bpi_fil.empty:
+                        df_bpi_fil['Organismo'] = 'BPI'
+                        dfs_combinados.append(df_bpi_fil)
+
+            # --- 2. Extraer BBk ---
+            with st.spinner("Extrayendo del BBk..."):
+                min_month, max_month = min(meses_num), max(meses_num)
+                min_year, max_year = min(anios_num), max(anios_num)
+                start_date_str = f"01.{min_month:02d}.{min_year}"
+                last_day = calendar.monthrange(max_year, max_month)[1]
+                end_date_str = f"{last_day:02d}.{max_month:02d}.{max_year}"
+                
+                df_bbk = load_data_bbk(start_date_str, end_date_str)
+                if not df_bbk.empty:
+                    mask_bbk = (df_bbk["Date"].dt.year.isin(anios_num)) & (df_bbk["Date"].dt.month.isin(meses_num))
+                    df_bbk_fil = df_bbk[mask_bbk].copy()
+                    if not df_bbk_fil.empty:
+                        df_bbk_fil['Organismo'] = 'BBk'
+                        dfs_combinados.append(df_bbk_fil)
+
+            # --- (Aquí iremos agregando FMI, BdE, etc. en el futuro) ---
+
+            # --- Consolidar Todo ---
+            if dfs_combinados:
+                combined_df = pd.concat(dfs_combinados, ignore_index=True)
+                combined_df = combined_df.sort_values("Date", ascending=False)
+                # Reordenamos las columnas para que Organismo quede en medio
+                combined_df = combined_df[['Date', 'Organismo', 'Title', 'Link']]
+            else:
+                combined_df = pd.DataFrame()
+            
+            st.session_state["todos_df_filtrado"] = combined_df
+
+            if len(combined_df) > 0:
+                st.subheader("2. Resultados consolidados")
+                
+                col_mensaje, col_boton = st.columns([3, 1])
+                with col_mensaje:
+                    str_meses = ", ".join(meses_seleccionados)
+                    str_anios = ", ".join(anios_seleccionados)
+                    st.success(f"Se encontraron **{len(combined_df)}** discursos en total para **{str_meses} {str_anios}**.")
+                
+                with col_boton:
+                    subtitulo_fechas = f"{str_meses} {str_anios}"
+                    word_file = generate_word(combined_df, title="Boletín Consolidado de Discursos", subtitle=subtitulo_fechas)
+                    st.download_button(
+                        label="📄 Descargar Consolidado en Word",
+                        data=word_file,
+                        file_name=f"discursos_consolidados_{'_'.join(meses_seleccionados)}_{'_'.join(anios_seleccionados)}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        use_container_width=True
+                    )
+                
+                # Mostrar en pantalla
+                display_df = combined_df.copy()
+                display_df["Date"] = display_df["Date"].dt.strftime('%Y-%m-%d')
+                display_df["Title"] = display_df.apply(lambda x: f"[{x['Title']}]({x['Link']})", axis=1)
+                
+                st.markdown(display_df[["Date", "Organismo", "Title"]].to_markdown(index=False), unsafe_allow_html=True)
+            else:
+                st.warning("No se encontraron discursos de ningún organismo para las fechas seleccionadas.")
+
+# Asegúrate de que el bloque de BPI empiece con 'elif' ahora:
+elif tipo_doc == "Discursos" and organismo_seleccionado == "BPI":
+# ... resto de tu código
 # MÓDULO: DISCURSOS -> BPI (Antes BIS)
 if tipo_doc == "Discursos" and organismo_seleccionado == "BPI":
     
@@ -483,6 +594,7 @@ elif tipo_doc == "Discursos" and organismo_seleccionado == "BBk (Alemania)":
 else:
     st.info(f"El extractor de **{tipo_doc}** para **{organismo_seleccionado}** está en construcción.")
     st.write("Próximamente podrás extraer estos documentos de forma automatizada.")
+
 
 
 
