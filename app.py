@@ -417,75 +417,123 @@ def load_pub_inst_bpi(start_date_str, end_date_str):
         df["Date"] = pd.to_datetime(df["Date"])
         df = df.sort_values("Date", ascending=False)
     return df
+
 @st.cache_data(show_spinner=False)
-@st.cache_data(show_spinner=False)
-def load_press_releases_fmi(start_date_str, end_date_str):
-    """Extractor FMI - Exclusivo para Press Releases vía news.json"""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json, text/plain, */*'
-    }
-    
+def load_country_reports_fmi(start_date_str, end_date_str):
+    """Extractor FMI - Country Reports (Conexión Directa a Coveo API)"""
     try: start_date = datetime.datetime.strptime(start_date_str, '%d.%m.%Y')
     except: start_date = datetime.datetime(2000, 1, 1)
     
     rows = []
     
-    # 1. CAZADOR DE BUILD ID (Usamos la página de news para asegurar la versión)
-    build_id = "OPXKbpp2La91iW-gTVkBX"
-    try:
-        res_html = requests.get("https://www.imf.org/en/news", headers=headers, timeout=15)
-        match = re.search(r'"buildId":"([^"]+)"', res_html.text)
-        if match:
-            build_id = match.group(1)
-    except:
-        pass
-
-    # 2. CONEXIÓN AL JSON DE NOTICIAS
-    url_json = f"https://www.imf.org/_next/data/{build_id}/en/news.json"
+    # 1. EL ENDPOINT Y LA LLAVE MAESTRA QUE DESCUBRISTE
+    url = "https://imfproduction561s308u.org.coveo.com/rest/search/v2?organizationId=imfproduction561s308u"
+    
+    headers = {
+        "Authorization": "Bearer xx742a6c66-f427-4f5a-ae1e-770dc7264e8a",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    # 2. EL PAYLOAD (Falsificamos la petición del buscador)
+    payload = {
+        "aq": "@imfseries==\"IMF Staff Country Reports\"", # Filtro estricto por la Serie
+        "numberOfResults": 100, # Cantidad a traer (Suficiente para un mes)
+        "sortCriteria": "@imfdate descending" # Los más recientes primero
+    }
     
     try:
-        res = requests.get(url_json, headers=headers, timeout=15)
+        # Hacemos un POST directo a la base de datos de Coveo
+        res = requests.post(url, headers=headers, json=payload, timeout=15)
+        
         if res.status_code == 200:
             data = res.json()
             
-            # Buscador recursivo para atrapar cualquier objeto que tenga formato de noticia
-            def extraer_noticias(obj):
-                if isinstance(obj, dict):
-                    # Si el diccionario tiene URL, href y un título, es una noticia
-                    if "url" in obj and isinstance(obj["url"], dict) and "href" in obj["url"] and "title" in obj:
-                        yield obj
-                    for k, v in obj.items():
-                        yield from extraer_noticias(v)
-                elif isinstance(obj, list):
-                    for item in obj:
-                        yield from extraer_noticias(item)
-
-            for item in extraer_noticias(data):
+            # 3. EXTRACCIÓN (Limpia y sin HTML)
+            for item in data.get("results", []):
                 titulo = item.get("title", "")
-                link_raw = item.get("url", {}).get("href", "")
+                link = item.get("clickUri", "")
                 
-                if not titulo or not link_raw:
-                    continue
-                    
-                # FILTRO EXACTO: Solo dejamos pasar los links que contienen "/pr-" 
-                # (ej. /pr-26074-gabon-imf-staff...)
-                if "/pr-" not in link_raw.lower():
-                    continue
-                    
-                link_real = link_raw if link_raw.startswith("http") else "https://www.imf.org" + link_raw
-                
-                d_str = item.get("publicationDate", "")
-                if d_str:
+                # La fecha viene en timestamp (milisegundos). Lo dividimos entre 1000 para segundos.
+                raw_date = item.get("raw", {}).get("date")
+                parsed_date = None
+                if raw_date:
                     try:
-                        parsed_date = parser.parse(d_str)
-                        if parsed_date.tzinfo is not None: 
-                            parsed_date = parsed_date.replace(tzinfo=None)
-                        
-                        if parsed_date >= start_date and not any(r['Link'] == link_real for r in rows):
-                            rows.append({"Date": parsed_date, "Title": titulo, "Link": link_real, "Organismo": "FMI"})
+                        parsed_date = datetime.datetime.fromtimestamp(raw_date / 1000.0)
                     except: pass
-    except:
+                
+                if not titulo or not link or not parsed_date: continue
+                
+                # Validamos contra la fecha del filtro de la app
+                if parsed_date >= start_date:
+                    if not any(r['Link'] == link for r in rows):
+                        rows.append({"Date": parsed_date, "Title": titulo, "Link": link, "Organismo": "FMI"})
+    except Exception as e:
+        pass
+        
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values("Date", ascending=False)
+    return df
+
+@st.cache_data(show_spinner=False)
+def load_press_releases_fmi(start_date_str, end_date_str):
+    """Extractor FMI - Press Releases (Historial completo vía Coveo API)"""
+    try: start_date = datetime.datetime.strptime(start_date_str, '%d.%m.%Y')
+    except: start_date = datetime.datetime(2000, 1, 1)
+    
+    rows = []
+    
+    # 1. El Endpoint y la llave que tú mismo descubriste
+    url = "https://imfproduction561s308u.org.coveo.com/rest/search/v2?organizationId=imfproduction561s308u"
+    
+    # 2. Inyección de Headers para evadir el bloqueo CORS
+    headers = {
+        "Authorization": "Bearer xx742a6c66-f427-4f5a-ae1e-770dc7264e8a",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Origin": "https://www.imf.org",   # <--- LA LLAVE PARA ENTRAR
+        "Referer": "https://www.imf.org/", # <--- CONFIRMA QUE "VENIMOS" DEL FMI
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    # 3. Payload: Agregamos el filtro estricto de idioma
+    payload = {
+        # Le pedimos PRs Y que el idioma sea inglés
+        "aq": "@imftype==\"Press Release\" AND @syslanguage==\"English\"", 
+        "numberOfResults": 150, 
+        "sortCriteria": "@imfdate descending"
+    }
+    
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=15)
+        
+        if res.status_code == 200:
+            data = res.json()
+            
+            for item in data.get("results", []):
+                titulo = item.get("title", "")
+                link = item.get("clickUri", "")
+                
+                # Coveo entrega la fecha en formato Unix (Milisegundos). 
+                # ¡Es perfecto porque no falla la conversión!
+                raw_date = item.get("raw", {}).get("date")
+                parsed_date = None
+                if raw_date:
+                    try:
+                        # Convertimos de milisegundos a fecha normal
+                        parsed_date = datetime.datetime.fromtimestamp(raw_date / 1000.0)
+                    except: pass
+                
+                if not titulo or not link or not parsed_date: continue
+                
+                # Filtro final de fechas
+                if parsed_date >= start_date:
+                    if not any(r['Link'] == link for r in rows):
+                        rows.append({"Date": parsed_date, "Title": titulo, "Link": link, "Organismo": "FMI"})
+    except Exception as e:
         pass
         
     df = pd.DataFrame(rows)
@@ -1367,15 +1415,16 @@ if modo_app == "Boletín":
                     elif org == "CEF": df = load_pub_inst_cef(sd, ed)
                     elif org == "BM": df = load_pub_inst_bm(sd, ed)
                     elif org == "FMI": 
-                        # 1. Los Gigantes Estáticos (Next.js Data JSON)
+                        # 1. SSG - JSON Estático (WEO, Fiscal Monitor)
                         df_flagships = load_pub_inst_fmi(sd, ed)
                         
-                        # 2. Los Comunicados (Next.js News JSON)
+                        # 2. SSG - JSON Estático (Comunicados)
                         df_prs = load_press_releases_fmi(sd, ed)
                         
-                        # 3. Los Country Reports (Tapestry AJAX Interception)
-                        df_crs = load_country_reports_elibrary(sd, ed)
+                        # 3. CSR API - Coveo (Country Reports)
+                        df_crs = load_country_reports_fmi(sd, ed) # <-- LA NUEVA API
                         
+                        # Unión
                         dfs_a_unir = [d for d in [df_flagships, df_prs, df_crs] if not d.empty]
                         if dfs_a_unir:
                             df = pd.concat(dfs_a_unir, ignore_index=True)
