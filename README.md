@@ -1,6 +1,6 @@
 # Boletín de Organismos Internacionales 
 
-Este ecosistema automatizado, desarrollado en **Python 3.12**, permite la extracción, filtrado y consolidación de información estratégica (discursos, reportes y working papers) de las principales instituciones financieras globales. El objetivo es estandarizar la vigilancia macroeconómica y reducir en un **90%** el tiempo de recolección manual de datos.
+Este ecosistema automatizado, desarrollado en **Python 3.12**, permite la extracción, filtrado y consolidación de información estratégica (discursos, reportes y working papers) de las principales instituciones financieras globales. El objetivo es estandarizar la vigilancia macroeconómica y reducir casi en su totalidad el tiempo de recolección manual de datos.
 
 ---
 
